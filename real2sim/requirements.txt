@@ -7,9 +7,14 @@ git+https://github.com/hongsukchoi/chumpy
 git+https://github.com/hongsukchoi/smplx
 timm
 einops
-scikit-learn 
+scikit-learn
 boto3
 requests
 pyliblzfse
 h5py
 yacs
+jax==0.7.0
+jaxlib==0.7.0
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+torchaudio==2.5.1+cu124

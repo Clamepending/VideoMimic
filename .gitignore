@@ -1,0 +1,32 @@
+# Ignore data folders
+real2sim/demo_data/
+demo_data/
+assets/
+input_image_back/
+
+# Ignore python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.egg
+
+# Ignore OS-specific files
+.DS_Store
+__MACOSX/
+
+# Ignore environment files
+.env
+.venv
+venv/
+env/
+.idea/
+
+# Ignore log files
+*.log 
