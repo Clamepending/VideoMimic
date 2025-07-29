@@ -21,7 +21,7 @@ from typing import Dict, Any, Tuple
 # Add the root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utilities.joint_names import SMPL_45_KEYPOINTS
+from utilities.joint_names import SMPLX_49_KEYPOINTS
 
 
 # -------------------------------------------------------------------------- #
@@ -236,16 +236,16 @@ def apply_gravity_calibration(
     
     # Process SMPL data
     print("Processing SMPL data...")
-    smpl_batch_layer_dict = {}
+    smplx_batch_layer_dict = {}
     human_verts_in_world_dict = {}
-    smpl_joints3d_in_world_dict = {}
-    smpl_global_orient_in_world_dict = {}
+    smplx_joints3d_in_world_dict = {}
+    smplx_global_orient_in_world_dict = {}
     
     for person_id in person_id_list:
         # Create SMPL model
-        smpl_batch_layer_dict[person_id] = smplx.create(
+        smplx_batch_layer_dict[person_id] = smplx.create(
             model_path='./assets/body_models',
-            model_type='smpl',
+            model_type='smplx',
             gender=gender,
             num_betas=10,
             batch_size=len(human_params_in_world[person_id]['body_pose'])
@@ -253,37 +253,40 @@ def apply_gravity_calibration(
         
         # Get SMPL parameters
         num_frames = human_params_in_world[person_id]['body_pose'].shape[0]  # (T, 23, 3, 3)
-        smpl_betas = torch.from_numpy(human_params_in_world[person_id]['betas']).to(device)  # (10,) or (T, 10)
-        if smpl_betas.ndim == 1:
-            smpl_betas = smpl_betas.repeat(num_frames, 1)  # (T, 10)
+        smplx_betas = torch.from_numpy(human_params_in_world[person_id]['betas']).to(device)  # (10,) or (T, 10)
+        if smplx_betas.ndim == 1:
+            smplx_betas = smplx_betas.repeat(num_frames, 1)  # (T, 10)
         
         # Get SMPL outputs
-        smpl_output_batch = smpl_batch_layer_dict[person_id](
-            body_pose=torch.from_numpy(human_params_in_world[person_id]['body_pose']).to(device),  # (T, 23, 3, 3)
-            betas=smpl_betas,  # (T, 10)
+        smplx_output_batch = smplx_batch_layer_dict[person_id](
+            body_pose=torch.from_numpy(human_params_in_world[person_id]['body_pose']).to(device),  # (T, 21, 3, 3)
+            betas=smplx_betas,  # (T, 10)
             global_orient=torch.from_numpy(human_params_in_world[person_id]['global_orient']).to(device),  # (T, 1, 3, 3)
+            jaw_pose=torch.from_numpy(human_params_in_world[person_id]['jaw_pose']).to(device),
+            left_hand_pose=torch.from_numpy(human_params_in_world[person_id]['left_hand_pose']).to(device),
+            right_hand_pose=torch.from_numpy(human_params_in_world[person_id]['right_hand_pose']).to(device),
             pose2rot=False
         )
         
         # Process joints and vertices
-        smpl_joints = smpl_output_batch['joints']  # (T, 45, 3)
-        smpl_root_joint = smpl_joints[:, 0:1, :]  # (T, 1, 3)
-        smpl_verts = smpl_output_batch['vertices'] - smpl_root_joint + torch.from_numpy(human_params_in_world[person_id]['root_transl']).to(device)  # (T, 6890, 3)
+        smplx_joints = smplx_output_batch['joints']  # (T, 49, 3)
+        smplx_root_joint = smplx_joints[:, 0:1, :]  # (T, 1, 3)
+        smplx_verts = smplx_output_batch['vertices'] - smplx_root_joint + torch.from_numpy(human_params_in_world[person_id]['root_transl']).to(device)  # (T, 10475, 3)
         
         # Store rotated joints and vertices
-        joints = smpl_joints.detach().cpu().numpy() - smpl_root_joint.detach().cpu().numpy() + human_params_in_world[person_id]['root_transl']  # (T, 45, 3)
-        joints = (joints @ world_rotation.T * world_scale_factor).astype(np.float32)  # (T, 45, 3)
-        smpl_joints3d_in_world_dict[person_id] = joints
-        smpl_global_orient_in_world_dict[person_id] = (world_rotation @ human_params_in_world[person_id]['global_orient']).astype(np.float32)  # (3, 3) @ (T, 1, 3, 3) -> (T, 1, 3, 3)
+        joints = smplx_joints.detach().cpu().numpy() - smplx_root_joint.detach().cpu().numpy() + human_params_in_world[person_id]['root_transl']  # (T, 49, 3)
+        joints = (joints @ world_rotation.T * world_scale_factor).astype(np.float32)  # (T, 49, 3)
+        smplx_joints3d_in_world_dict[person_id] = joints
+        smplx_global_orient_in_world_dict[person_id] = (world_rotation @ human_params_in_world[person_id]['global_orient']).astype(np.float32)  # (3, 3) @ (T, 1, 3, 3) -> (T, 1, 3, 3)
         
-        verts = smpl_verts.detach().cpu().numpy() @ world_rotation.T * world_scale_factor  # (T, 6890, 3)
+        verts = smplx_verts.detach().cpu().numpy() @ world_rotation.T * world_scale_factor  # (T, 10475, 3)
         human_verts_in_world_dict[person_id] = verts.astype(np.float32)
     
     # Save calibrated keypoints
     keypoints_output = {
-        'root_orient': smpl_global_orient_in_world_dict,
-        'joints': smpl_joints3d_in_world_dict,
-        'joint_names': SMPL_45_KEYPOINTS,
+        'root_orient': smplx_global_orient_in_world_dict,
+        'joints': smplx_joints3d_in_world_dict,
+        'joint_names': SMPLX_49_KEYPOINTS,
         'world_rotation': world_rotation # (gravity_world)T(prev_world)
     }
     
@@ -312,8 +315,8 @@ def apply_gravity_calibration(
     
     # Update human parameters with calibrated values
     for person_id in person_id_list:
-        updated_world_env_and_human['our_pred_humans_smplx_params'][person_id]['root_transl'] = smpl_joints3d_in_world_dict[person_id][:, 0:1, :].astype(np.float32)  # (T, 1, 3)
-        updated_world_env_and_human['our_pred_humans_smplx_params'][person_id]['global_orient'] = smpl_global_orient_in_world_dict[person_id]  # (T, 1, 3, 3)
+        updated_world_env_and_human['our_pred_humans_smplx_params'][person_id]['root_transl'] = smplx_joints3d_in_world_dict[person_id][:, 0:1, :].astype(np.float32)  # (T, 1, 3)
+        updated_world_env_and_human['our_pred_humans_smplx_params'][person_id]['global_orient'] = smplx_global_orient_in_world_dict[person_id]  # (T, 1, 3, 3)
     
     # Save updated megahunter file
     calibrated_megahunter_path = output_dir / f"gravity_calibrated_megahunter.h5"
@@ -329,7 +332,7 @@ def apply_gravity_calibration(
             visualize_gravity_calibration(
                 keypoints_output, 
                 human_verts_in_world_dict, 
-                smpl_batch_layer_dict, 
+                smplx_batch_layer_dict, 
                 person_id_list, 
                 num_frames
             )

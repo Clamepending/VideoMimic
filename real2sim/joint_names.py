@@ -1,11 +1,3 @@
-# Copyright (c) Berkeley VideoMimic team.
-# All rights reserved.
-# 
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-# 
-# For questions or issues, please contact Hongsuk Choi (redstonepo@gmail.com)
-
 # Egohumans 2D annotation joint names
 # https://github.com/open-mmlab/mmhuman3d/blob/main/mmhuman3d/core/conventions/keypoints_mapping/coco_wholebody.py
 # https://github.com/jin-s13/COCO-WholeBody/blob/master/imgs/Fig2_anno.png
@@ -303,6 +295,58 @@ SMPLX_JOINT_NAMES = [
     'lip_bottom',
     'right_lip_3'
 ] # ORIGINAL_SMPLX_JOINT_NAMES[:127]
+
+SMPL_KEYPOINTS = [
+    'pelvis',
+    'left_hip',
+    'right_hip',
+    'spine1',
+    'left_knee',
+    'right_knee',
+    'spine2',
+    'left_ankle',
+    'right_ankle',
+    'spine3',
+    'left_foot',
+    'right_foot',
+    'neck',
+    'left_collar',
+    'right_collar',
+    'head',
+    'left_shoulder',
+    'right_shoulder',
+    'left_elbow',
+    'right_elbow',
+    'left_wrist',
+    'right_wrist',
+    'left_hand_root',
+    'right_hand_root',
+]
+
+# the full keypoints produced by the default SMPL J_regressor
+SMPL_45_KEYPOINTS = SMPL_KEYPOINTS + [
+    'nose',
+    'right_eye',
+    'left_eye',
+    'right_ear',
+    'left_ear',
+    'left_big_toe',
+    'left_small_toe',
+    'left_heel',
+    'right_big_toe',
+    'right_small_toe',
+    'right_heel',
+    'left_thumb',
+    'left_index',
+    'left_middle',
+    'left_ring',
+    'left_pinky',
+    'right_thumb',
+    'right_index',
+    'right_middle',
+    'right_ring',
+    'right_pinky',
+]
 
 # Original SMPLX joint names - https://github.com/vchoutas/smplx/blob/main/smplx/joint_names.py
 # face joint order: https://github.com/Rubikplayer/flame-fitting
@@ -683,11 +727,4 @@ SMPL_45_KEYPOINTS = SMPL_KEYPOINTS + [
     'right_middle',
     'right_ring',
     'right_pinky',
-]
-
-SMPLX_49_KEYPOINTS = SMPL_45_KEYPOINTS + [
-    'jaw',
-    'left_eye_smplhf',
-    'right_eye_smplhf',
-    'left_index1',
 ]

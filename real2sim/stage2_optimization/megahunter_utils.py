@@ -208,6 +208,18 @@ def get_smpl_init_data(data_path: str, frame_list: List[int]):
     return smpl_params_dict
 
 
+def get_smplx_init_data(data_path: str, frame_list: List[int]):
+    """Load per-frame SMPLX parameter pickles."""
+    smplx_params_dict: Dict[int, Dict] = {}
+    for frame_idx in frame_list:
+        smplx_data_path = osp.join(data_path, f"smplx_params_{frame_idx:05d}.pkl")
+        if not osp.exists(smplx_data_path):
+            continue
+        with open(smplx_data_path, "rb") as f:
+            smplx_params_dict[frame_idx] = pickle.load(f)
+    return smplx_params_dict
+
+
 def get_pose2d_init_data(data_path: str, frame_list: List[int]):
     """Load ViTPose 2-D keypoints JSON files."""
     pose2d_params_dict = {}

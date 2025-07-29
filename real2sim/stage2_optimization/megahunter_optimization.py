@@ -17,7 +17,7 @@ Example call (exactly the same as before):
         --world-env-path ./demo_data/input_megasam/megasam_reconstruction_results_release_test_01_cam01_frame_10_90_subsample_3.h5 \
         --bbox-dir         ./demo_data/input_masks/release_test_01/cam01/json_data \
         --pose2d-dir       ./demo_data/input_2d_poses/release_test_01/cam01 \
-        --smpl-dir         ./demo_data/input_3d_meshes/release_test_01/cam01 \
+        --smplx-dir         ./demo_data/input_3d_meshes/release_test_01/cam01 \
         --out-dir          ./demo_data/output_hunter_human_and_points
 """
 
@@ -65,7 +65,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.append(project_root)
 
-from utilities.smpl_jax_layer import SmplModel
+from utilities.smpl_jax_layer import SmplxModel
 from visualization.optimization_results_visualization import (
     show_points_and_keypoints,
     show_points_and_keypoints_and_smpl,
@@ -76,7 +76,7 @@ from stage2_optimization.megahunter_utils import (
     load_dict_from_hdf5,
     save_dict_to_hdf5,
     get_megahunter_init_data,
-    get_smpl_init_data,
+    get_smplx_init_data,
     get_pose2d_init_data,
     get_bbox_init_data,
     get_mask_init_data,
@@ -91,15 +91,15 @@ from stage2_optimization.megahunter_utils import (
     # joint constants
     coco_main_body_joint_idx,
     coco_main_body_joint_names,
-    smpl_main_body_joint_idx,
+    smplx_main_body_joint_idx,
     coco_main_body_skeleton,
-    smpl_whole_body_joint_idx,
+    smplx_whole_body_joint_idx,
 )
 from stage2_optimization.megahunter_costs import optimize_world_and_humans
 
 # Import robust data loading functions
 from stage2_optimization.megahunter_utils_robust import (
-    get_smpl_init_data_robust,
+    get_smplx_init_data_robust,
     get_pose2d_init_data_robust,
     validate_multi_human_data,
     create_person_frame_mask,
@@ -136,6 +136,66 @@ def estimate_initial_trans(
     return torch.stack([x, y, z])
 
 
+def get_smplx_output(smplx_params, device, smplx_model):
+    """Utility that converts a SMPL-X parameter dict (with separate jaw/hand poses) into a batched
+    SMPL-X forward pass. Rotation matrices are converted to axis-angle as expected by the
+    `smplx` library."""
+
+    # Required parts -------------------------------------------------------------------------
+    body_pose_mat = torch.as_tensor(smplx_params['body_pose'], dtype=torch.float32, device=device)  # (21,3,3)
+    global_orient_mat = torch.as_tensor(smplx_params['global_orient'], dtype=torch.float32, device=device)  # (1,3,3)
+    betas = torch.as_tensor(smplx_params['betas'], dtype=torch.float32, device=device)  # (10,)
+
+    body_pose_aa = rotation_matrix_to_axis_angle_torch(body_pose_mat[None, ...])  # (1,21,3)
+    global_orient_aa = rotation_matrix_to_axis_angle_torch(global_orient_mat[None, ...])  # (1,3)
+
+    batch_size = 1
+    dtype = torch.float32
+
+    # Optional / additional parts ------------------------------------------------------------
+    def _mat_to_aa(mat: torch.Tensor) -> torch.Tensor:
+        """(n,3,3) -> (n,3) axis-angle"""
+        return rotation_matrix_to_axis_angle_torch(mat.unsqueeze(0))[0]
+
+    # Jaw (take the first matrix if 3 are provided – jaw, leye, reye)
+    if 'jaw_pose' in smplx_params and smplx_params['jaw_pose'].size != 0:
+        jaw_pose_aa = _mat_to_aa(torch.as_tensor(smplx_params['jaw_pose'], dtype=torch.float32, device=device)[0:1])[None, :]  # (1,3)
+    else:
+        jaw_pose_aa = torch.zeros([batch_size, 3], dtype=dtype, device=device)
+
+    # Eyes are kept zero for now
+    leye_pose_aa = torch.zeros([batch_size, 3], dtype=dtype, device=device)
+    reye_pose_aa = torch.zeros([batch_size, 3], dtype=dtype, device=device)
+
+    # Hand poses: flatten axis-angle for 15 joints (15*3=45)
+    # MIGHT NEED TO MODIFY to use 6 PCA cocmpoennts for hand pose
+    def _hand_to_aa(key: str):
+        if key in smplx_params and smplx_params[key].size != 0:
+            mat = torch.as_tensor(smplx_params[key], dtype=torch.float32, device=device)  # (15,3,3)
+            aa = rotation_matrix_to_axis_angle_torch(mat.unsqueeze(0)).view(batch_size, -1)  # (1,45)
+            return aa
+        return torch.zeros([batch_size, 45], dtype=dtype, device=device)
+
+    left_hand_aa = _hand_to_aa('left_hand_pose')
+    right_hand_aa = _hand_to_aa('right_hand_pose')
+
+    # Expression (unused for now)
+    expression = torch.zeros([batch_size, 10], dtype=dtype, device=device)
+
+    smplx_output = smplx_model(
+        body_pose=body_pose_aa.view(batch_size, -1),  # (1,63)
+        betas=betas.unsqueeze(0),
+        global_orient=global_orient_aa,
+        jaw_pose=jaw_pose_aa,
+        leye_pose=leye_pose_aa,
+        reye_pose=reye_pose_aa,
+        left_hand_pose=left_hand_aa,
+        right_hand_pose=right_hand_aa,
+        expression=expression,
+        pose2rot=True,
+    )
+    return smplx_output
+
 # -------------------------------------------------------------------------- #
 # Main alignment routine (verbatim logic, comments shortened)
 # -------------------------------------------------------------------------- #
@@ -143,7 +203,7 @@ def run_jax_alignment(
     world_env_path: str,
     bbox_dir: str,
     pose2d_dir: str,
-    smpl_dir: str,
+    smplx_dir: str,
     out_dir: str,
     # flags
     get_one_motion: bool = True,
@@ -158,16 +218,19 @@ def run_jax_alignment(
     smoothness_weight: float = 0.5,
     rot_reg_weight: float = 1.5,
     local_pose_alignment_weight: float = 0.05,
+    hand_alignment_weight: float = 0.5,
     res_rot_smooth_weight: float = 1.0,
     local_pose_smooth_weight: float = 1.0,
+    hand_pose_smooth_weight: float = 1.0,
     gradient_thr: float = 0.01,
     joint3d_conf_threshold: float = 0.3,
     joint2d_conf_threshold: float = 0.5,
     optimize_root_rotation: bool = True,
     optimize_local_pose: bool = True,
+    optimize_hand_pose: bool = True,
     post_temporal_smoothing: bool = False,
     frame_missing_thr: int = 3,
-    smpl_model_path: str = "./assets/body_models/smpl/SMPL_MALE.pkl",
+    smplx_model_path: str = "./assets/body_models/smplx/SMPLX_MALE.pkl",
     device: str = "cuda"
 ):
     """
@@ -200,13 +263,13 @@ def run_jax_alignment(
     frame_list = [int(fn.split("_")[-1]) for fn in frame_names]
 
     # ------------------------------------------------------------------ #
-    # 2. Load human-related detections (SMPL, 2-D pose, masks …)
+    # 2. Load human-related detections (SMPLX, 2-D pose, masks …)
     # ------------------------------------------------------------------ #
     # Use robust data loading functions for multi-human support
     if multihuman:
         # Load data with robust handling for missing frames
-        smpl_params_dict, smpl_missing_data = get_smpl_init_data_robust(
-            smpl_dir, frame_list, expected_person_ids=None, 
+        smplx_params_dict, smplx_missing_data = get_smplx_init_data_robust(
+            smplx_dir, frame_list, expected_person_ids=None, 
             fill_missing=True, verbose=True
         )
         pose2d_params_dict, pose2d_missing_data = get_pose2d_init_data_robust(
@@ -216,16 +279,16 @@ def run_jax_alignment(
         bbox_params_dict = get_bbox_init_data(bbox_dir, frame_list)
         
         # Log missing data summary
-        if smpl_missing_data or pose2d_missing_data:
+        if smplx_missing_data or pose2d_missing_data:
             print("\nData loading summary:")
-            for pid in set(list(smpl_missing_data.keys()) + list(pose2d_missing_data.keys())):
-                smpl_missing = len(smpl_missing_data.get(pid, []))
+            for pid in set(list(smplx_missing_data.keys()) + list(pose2d_missing_data.keys())):
+                smplx_missing = len(smplx_missing_data.get(pid, []))
                 pose2d_missing = len(pose2d_missing_data.get(pid, []))
-                if smpl_missing > 0 or pose2d_missing > 0:
-                    print(f"  Person {pid}: {smpl_missing} missing SMPL frames, {pose2d_missing} missing pose2D frames")
+                if smplx_missing > 0 or pose2d_missing > 0:
+                    print(f"  Person {pid}: {smplx_missing} missing SMPLX frames, {pose2d_missing} missing pose2D frames")
     else:
         # Use original functions for single person
-        smpl_params_dict = get_smpl_init_data(smpl_dir, frame_list)
+        smplx_params_dict = get_smplx_init_data(smplx_dir, frame_list)
         pose2d_params_dict = get_pose2d_init_data(pose2d_dir, frame_list)
         bbox_params_dict = get_bbox_init_data(bbox_dir, frame_list)
     mask_dir = osp.join(bbox_dir, "..", "mask_data")
@@ -330,7 +393,7 @@ def run_jax_alignment(
         print("\nValidating multi-human data consistency...")
         valid_person_ids, valid_frames_per_person = validate_multi_human_data(
             frame_list, person_ids, 
-            smpl_params_dict, pose2d_params_dict, bbox_params_dict,
+            smplx_params_dict, pose2d_params_dict, bbox_params_dict,
             min_valid_frames_ratio=0.5, verbose=True
         )
         
@@ -353,9 +416,9 @@ def run_jax_alignment(
     # The PyTorch implementation is more flexible and easier to use for Pytorch users.
     # The Jax implementation is more robust and reliable.
     # ------------------------------------------------------------------ #
-    smpl_model = smplx.create(
+    smplx_model = smplx.create(
         model_path="./assets/body_models",
-        model_type="smpl",
+        model_type="smplx",
         gender="male",
         num_betas=10,
         batch_size=1,
@@ -364,17 +427,17 @@ def run_jax_alignment(
     # ----- a. Gather per-frame human detections into nested dict -------- #
     human_init_per_frame: defaultdict[int, dict] = defaultdict(dict)
     for fidx in frame_list:
-        if fidx not in smpl_params_dict or fidx not in pose2d_params_dict or fidx not in bbox_params_dict:
+        if fidx not in smplx_params_dict or fidx not in pose2d_params_dict or fidx not in bbox_params_dict:
             continue
-        smpl_p, pose2d_p, bbox_p = (
-            smpl_params_dict[fidx],
+        smplx_p, pose2d_p, bbox_p = (
+            smplx_params_dict[fidx],
             pose2d_params_dict[fidx],
             bbox_params_dict[fidx],
         )
         for pid_ in person_ids:
             try:
                 human_init_per_frame[fidx][pid_] = dict(
-                    smpl_params=smpl_p[pid_]["smpl_params"],
+                    smplx_params=smplx_p[pid_]["smplx_params"],
                     pose2d_params=pose2d_p[pid_],
                     bbox_params=bbox_p[pid_],
                 )
@@ -403,9 +466,9 @@ def run_jax_alignment(
                 dtype=torch.float32,
             )
             bbox = torch.tensor(entry["bbox_params"], device=device, dtype=torch.float32)
-            smpl_param_t = {
+            smplx_param_t = {
                 k: torch.tensor(v, device=device, dtype=torch.float32)
-                for k, v in entry["smpl_params"].items()
+                for k, v in entry["smplx_params"].items()
             }
 
             # Confidence on bbox = mean keypoint conf
@@ -463,7 +526,7 @@ def run_jax_alignment(
             human_params_per_frame_per_person[fidx][pid_] = dict(
                 pose2d=pose2d_tf,
                 bbox=bbox,
-                smpl_params=smpl_param_t,
+                smplx_params=smplx_param_t,
                 pose3d_world=torch.cat([sample3d, conf], dim=1),
             )
 
@@ -525,36 +588,36 @@ def run_jax_alignment(
         human_params_per_person_transformed = {}
         human_params_per_person = human_params_per_frame_per_person[frame_idx]
         for person_id, person_info in human_params_per_person.items():
-            smpl_params = smpl_params_dict[frame_idx][person_id]['smpl_params']
+            smplx_params = smplx_params_dict[frame_idx][person_id]['smplx_params']
 
             with torch.no_grad():
-                body_pose = torch.from_numpy(smpl_params['body_pose']).to(device)[None, :, :, :] # (1, 23, 3, 3)
-                global_orient = torch.from_numpy(smpl_params['global_orient']).to(device)[None, :, :] # (1, 1, 3, 3)
-                betas = torch.from_numpy(smpl_params['betas']).to(device)[None, :] # (1, 10)
+                body_pose = torch.from_numpy(smplx_params['body_pose']).to(device)[None, :, :, :] # (1, 23, 3, 3)
+                global_orient = torch.from_numpy(smplx_params['global_orient']).to(device)[None, :, :] # (1, 1, 3, 3)
+                betas = torch.from_numpy(smplx_params['betas']).to(device)[None, :] # (1, 10)
             
-                smpl_output = smpl_model(body_pose=body_pose, betas=betas, global_orient=global_orient, pose2rot=False)
+                smplx_output = smplx_model(body_pose=body_pose, betas=betas, global_orient=global_orient, pose2rot=False)
 
-                smpl_root_joint = smpl_output.joints[0, 0]
-                smpl_joints = smpl_output.joints[0] - smpl_root_joint[None, :3]
+                smplx_root_joint = smplx_output.joints[0, 0]
+                smplx_joints = smplx_output.joints[0] - smplx_root_joint[None, :3]
 
             vitpose_2d_keypoints = human_params_per_frame_per_person[frame_idx][person_id]['pose2d'] # (J, 3)
             focal_length = im_K_dict[frame_name][0, 0]
             princpt = im_K_dict[frame_name][:2, 2]
             right_hip_idx = coco_main_body_joint_names.index('right_hip')
             left_hip_idx = coco_main_body_joint_names.index('left_hip')
-            init_root_trans = estimate_initial_trans(smpl_joints[smpl_main_body_joint_idx], vitpose_2d_keypoints[coco_main_body_joint_idx], focal_length, princpt, coco_main_body_skeleton, right_hip_idx, left_hip_idx)
+            init_root_trans = estimate_initial_trans(smplx_joints[smplx_main_body_joint_idx], vitpose_2d_keypoints[coco_main_body_joint_idx], focal_length, princpt, coco_main_body_skeleton, right_hip_idx, left_hip_idx)
 
             # transform the init_root_trans to be in the world coordinate system
             cam2world = im_poses_dict[frame_name]
             init_root_trans_world = cam2world[:3, :3] @ init_root_trans + cam2world[:3, 3]
-            smpl_params_dict[frame_idx][person_id]['smpl_params']['init_root_trans'] = init_root_trans_world # (3,)
+            smplx_params_dict[frame_idx][person_id]['smplx_params']['init_root_trans'] = init_root_trans_world # (3,)
 
             # transform the global orient to be in the world coordinate system
-            global_orient_cam_rotmat = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['global_orient']
+            global_orient_cam_rotmat = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['global_orient']
 
             global_orient_world_rotmat = cam2world[:3, :3] @ global_orient_cam_rotmat[0]
 
-            human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['global_orient'] = global_orient_world_rotmat[None, :, :]
+            human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['global_orient'] = global_orient_world_rotmat[None, :, :]
 
     # ------------------------------------------------------------------ #
     # 5. Visualize the sampled 3D points with the pointcloud from Monst3r
@@ -596,21 +659,21 @@ def run_jax_alignment(
     padded_num_frames = ((num_frames - 1)// 100 + 1) * 100
     num_frames = padded_num_frames
 
-    smpl_joints_np = np.zeros((num_persons, num_frames, num_joints, 3))
+    smplx_joints_np = np.zeros((num_persons, num_frames, num_joints, 3))
     megasam_joints_np = np.zeros((num_persons, num_frames, num_joints, 3))
     joint_confidences_np = np.zeros((num_persons, num_frames, num_joints))
     person_frame_mask_np = np.zeros((num_persons, num_frames))
     init_global_orient_np = np.zeros((num_persons, num_frames, 3, 3))
     init_root_trans_np = np.zeros((num_persons, num_frames, 3))
-    smpl_betas_np = np.zeros((num_persons, num_frames, 10))
-    smpl_body_pose_np = np.zeros((num_persons, num_frames, 23, 3, 3))
+    smplx_betas_np = np.zeros((num_persons, num_frames, 10))
+    smplx_body_pose_np = np.zeros((num_persons, num_frames, 54, 3, 3))
 
     # for projection loss
     camera_extrinsics_np = np.eye(4)[None, :, :].repeat(num_frames, axis=0) #np.zeros((num_frames, 4, 4))
     camera_intrinsics_np = np.eye(3)[None, :, :].repeat(num_frames, axis=0) #np.zeros((num_frames, 3, 3))
-    whole_body_num_joints = len(smpl_whole_body_joint_idx) # joints including the feet
+    whole_body_num_joints = len(smplx_whole_body_joint_idx) # joints including the feet
 
-    smpl_wholebody_joints_np = np.zeros((num_persons, num_frames, whole_body_num_joints, 3))
+    smplx_wholebody_joints_np = np.zeros((num_persons, num_frames, whole_body_num_joints, 3))
     vitpose_joints_np = np.zeros((num_persons, num_frames, whole_body_num_joints, 2))
     vitpose_confidences_np = np.zeros((num_persons, num_frames, whole_body_num_joints))
 
@@ -618,7 +681,7 @@ def run_jax_alignment(
         known_betas_path = osp.join(osp.dirname(__file__), '../assets/robot_asset/g1', 'known_betas.json')
         print("Loading G1 shape from ", known_betas_path)
     else:
-        known_betas_path = osp.join(smpl_dir, 'known_betas.json')
+        known_betas_path = osp.join(smplx_dir, 'known_betas.json')
         print("Loading shape from ", known_betas_path)
     if osp.exists(known_betas_path):
         with open(known_betas_path, 'r') as f:
@@ -640,28 +703,28 @@ def run_jax_alignment(
             camera_intrinsics_np[f_idx] = im_K_dict[frame_name].cpu().numpy()
             
 
-            if (frame_idx in smpl_params_dict and 
-                person_id in smpl_params_dict[frame_idx] and
+            if (frame_idx in smplx_params_dict and 
+                person_id in smplx_params_dict[frame_idx] and
                 frame_idx in human_params_per_frame_per_person and
                 person_id in human_params_per_frame_per_person[frame_idx]):
                 
                 # Get SMPL joints
-                smpl_params = smpl_params_dict[frame_idx][person_id]['smpl_params']
+                smplx_params = smplx_params_dict[frame_idx][person_id]['smplx_params']
 
                 with torch.no_grad():
-                    body_pose = torch.from_numpy(smpl_params['body_pose']).to(device)[None, :, :, :] # (1, 23, 3, 3)
-                    global_orient = torch.from_numpy(smpl_params['global_orient']).to(device)[None, :, :] # (1, 1, 3, 3)
+                    body_pose = torch.from_numpy(smplx_params['body_pose']).to(device)[None, :, :, :] # (1, 23, 3, 3)
+                    global_orient = torch.from_numpy(smplx_params['global_orient']).to(device)[None, :, :] # (1, 1, 3, 3)
                     if known_betas is not None:
-                        smpl_params['betas'] = known_betas[0]
+                        smplx_params['betas'] = known_betas[0]
 
-                    betas = torch.from_numpy(smpl_params['betas']).to(device)[None, :] # (1, 10)
+                    betas = torch.from_numpy(smplx_params['betas']).to(device)[None, :] # (1, 10)
                 
-                    smpl_output = smpl_model(body_pose=body_pose, betas=betas, global_orient=global_orient, pose2rot=False)
+                    smplx_output = smplx_model(body_pose=body_pose, betas=betas, global_orient=global_orient, pose2rot=False)
 
-                    smpl_root_joint = smpl_output.joints[0, 0].cpu().numpy()
-                    smpl_joints = smpl_output.joints[0].cpu().numpy()
+                    smplx_root_joint = smplx_output.joints[0, 0].cpu().numpy()
+                    smplx_joints = smplx_output.joints[0].cpu().numpy()
                     # root joint alignment
-                    smpl_joints[:, :3] -= smpl_root_joint[None, :3]
+                    smplx_joints[:, :3] -= smplx_root_joint[None, :3]
                 
                 pose2d_vitpose_joints = human_params_per_frame_per_person[frame_idx][person_id]['pose2d'][coco_main_body_joint_idx, :2].cpu().numpy()
                 pose2d_vitpose_confidences = human_params_per_frame_per_person[frame_idx][person_id]['pose2d'][coco_main_body_joint_idx, 2].cpu().numpy()
@@ -674,8 +737,8 @@ def run_jax_alignment(
                     pose2d_vitpose_confidences[pose2d_vitpose_confidences <= joint2d_conf_threshold] = 0.0
                     vitpose_confidences_np[p_idx, f_idx] = pose2d_vitpose_confidences / bbox_area # weight by bbox area
                     # person_frame_mask_np[p_idx, f_idx] = 1.0
-                    smpl_wholebody_joints_np[p_idx, f_idx] = smpl_joints[smpl_whole_body_joint_idx].copy()
-                    init_root_trans_np[p_idx, f_idx] = smpl_params_dict[frame_idx][person_id]['smpl_params']['init_root_trans'].cpu().numpy()
+                    smplx_wholebody_joints_np[p_idx, f_idx] = smplx_joints[smplx_whole_body_joint_idx].copy()
+                    init_root_trans_np[p_idx, f_idx] = smplx_params_dict[frame_idx][person_id]['smplx_params']['init_root_trans'].cpu().numpy()
 
                 # Get SAM joints and confidence
                 human_data = human_params_per_frame_per_person[frame_idx][person_id]
@@ -688,16 +751,16 @@ def run_jax_alignment(
                 
                 # Only include frame if at least some joints are valid
                 if np.any(valid_confidence):
-                    smpl_joints_np[p_idx, f_idx] = smpl_joints[smpl_main_body_joint_idx].copy()
+                    smplx_joints_np[p_idx, f_idx] = smplx_joints[smplx_main_body_joint_idx].copy()
                     megasam_joints_np[p_idx, f_idx] = megasam_joints
                     joint_confidences_np[p_idx, f_idx] = confidence
                     person_frame_mask_np[p_idx, f_idx] = 1.0 #person_frame_mask_np[p_idx, f_idx] + 1.0
                     init_global_orient_np[p_idx, f_idx] = global_orient.squeeze(0).detach().cpu().numpy()
 
-                    smpl_betas_np[p_idx, f_idx] = smpl_params['betas']
-                    smpl_body_pose_np[p_idx, f_idx] = smpl_params['body_pose']
+                    smplx_betas_np[p_idx, f_idx] = smplx_params['betas']
+                    smplx_body_pose_np[p_idx, f_idx] = smplx_params['body_pose']
 
-    # After the loops that populate smpl_joints_np, megasam_joints_np, joint_confidences_np, init_global_orient_np
+    # After the loops that populate smplx_joints_np, megasam_joints_np, joint_confidences_np, init_global_orient_np
     valid_mask = person_frame_mask_np.astype(np.float32)  # Create a mask of valid frames
     
     # Check for NaN values before interpolation
@@ -706,8 +769,8 @@ def run_jax_alignment(
         nan_issues = []
         for p_idx, person_id in enumerate(person_ids):
             # Check each data array for NaN
-            if np.any(np.isnan(smpl_joints_np[p_idx])):
-                nan_issues.append(f"Person {person_id}: NaN in smpl_joints")
+            if np.any(np.isnan(smplx_joints_np[p_idx])):
+                nan_issues.append(f"Person {person_id}: NaN in smplx_joints")
             if np.any(np.isnan(megasam_joints_np[p_idx])):
                 nan_issues.append(f"Person {person_id}: NaN in megasam_joints")
             if np.any(np.isnan(joint_confidences_np[p_idx])):
@@ -716,10 +779,10 @@ def run_jax_alignment(
                 nan_issues.append(f"Person {person_id}: NaN in init_global_orient")
             if np.any(np.isnan(init_root_trans_np[p_idx])):
                 nan_issues.append(f"Person {person_id}: NaN in init_root_trans")
-            if np.any(np.isnan(smpl_betas_np[p_idx])):
-                nan_issues.append(f"Person {person_id}: NaN in smpl_betas")
-            if np.any(np.isnan(smpl_body_pose_np[p_idx])):
-                nan_issues.append(f"Person {person_id}: NaN in smpl_body_pose")
+            if np.any(np.isnan(smplx_betas_np[p_idx])):
+                nan_issues.append(f"Person {person_id}: NaN in smplx_betas")
+            if np.any(np.isnan(smplx_body_pose_np[p_idx])):
+                nan_issues.append(f"Person {person_id}: NaN in smplx_body_pose")
         
         if nan_issues:
             print("WARNING: Found NaN values in input data:")
@@ -728,19 +791,19 @@ def run_jax_alignment(
             print("These will be handled by interpolation...")
 
     # Call the interpolation function
-    valid_mask, smpl_joints_np, megasam_joints_np, joint_confidences_np, init_global_orient_np, init_root_trans_np, smpl_betas_np, smpl_body_pose_np, vitpose_joints_np, vitpose_confidences_np, smpl_wholebody_joints_np = interpolate_frames(
+    valid_mask, smplx_joints_np, megasam_joints_np, joint_confidences_np, init_global_orient_np, init_root_trans_np, smplx_betas_np, smplx_body_pose_np, vitpose_joints_np, vitpose_confidences_np, smplx_wholebody_joints_np = interpolate_frames(
         valid_mask,
-        smpl_joints_np,
+        smplx_joints_np,
         megasam_joints_np,
         joint_confidences_np,
         init_global_orient_np,
         init_root_trans_np,
-        smpl_betas_np,
-        smpl_body_pose_np,
+        smplx_betas_np,
+        smplx_body_pose_np,
         # for projection loss
         vitpose_joints_np,
         vitpose_confidences_np,
-        smpl_wholebody_joints_np,
+        smplx_wholebody_joints_np,
         # for projection loss
         threshold=frame_missing_thr,
         get_one_motion=get_one_motion  # Set your desired threshold here
@@ -779,29 +842,29 @@ def run_jax_alignment(
     print("Start the optimization...")
     # Run the optimization
     person_frame_mask = jnp.array(person_frame_mask_np)
-    smpl_joints = jnp.array(smpl_joints_np)
+    smplx_joints = jnp.array(smplx_joints_np)
     megasam_joints = jnp.array(megasam_joints_np)
     joint_confidences = jnp.array(joint_confidences_np)
     init_global_orient = jnp.array(init_global_orient_np)
     init_root_trans = jnp.array(init_root_trans_np)
-    smpl_body_pose = jnp.array(smpl_body_pose_np) 
+    smplx_body_pose = jnp.array(smplx_body_pose_np) 
 
     # for projection loss
     vitpose_joints = jnp.array(vitpose_joints_np)
     vitpose_confidences = jnp.array(vitpose_confidences_np)
     extrinsics = jnp.array(camera_extrinsics_np)
     intrinsics = jnp.array(camera_intrinsics_np)
-    smpl_wholebody_joints = jnp.array(smpl_wholebody_joints_np)
+    smplx_wholebody_joints = jnp.array(smplx_wholebody_joints_np)
 
     # Load SMPL jax model
-    smpl_model_jax = SmplModel.load(Path(smpl_model_path))
-    smpl_models_with_shape_jax = {}
-    smpl_models_beta_mean = {}
+    smplx_model_jax = SmplxModel.load(Path(smplx_model_path))
+    smplx_models_with_shape_jax = {}
+    smplx_models_beta_mean = {}
     for p_idx, person_id in enumerate(person_ids):
-        smpl_model_beta_mean = np.mean(smpl_betas_np[p_idx][valid_mask[p_idx] == 1], axis=0)
-        smpl_models_with_shape_jax[person_id] = smpl_model_jax.with_shape(smpl_model_beta_mean)
-        smpl_models_beta_mean[person_id] = smpl_model_beta_mean
-    smpl_models_with_shape_jax_tuple = tuple(smpl_models_with_shape_jax.values())
+        smplx_model_beta_mean = np.mean(smplx_betas_np[p_idx][valid_mask[p_idx] == 1], axis=0)
+        smplx_models_with_shape_jax[person_id] = smplx_model_jax.with_shape(smplx_model_beta_mean)
+        smplx_models_beta_mean[person_id] = smplx_model_beta_mean
+    smplx_models_with_shape_jax_tuple = tuple(smplx_models_with_shape_jax.values())
 
     # ------------------------------------------------------------------ #
     # 6-b. Optimize the Human and Scene parameters
@@ -811,19 +874,19 @@ def run_jax_alignment(
     # optimized_root_residual_rotations: (num_persons, num_frames, 3, 3)
     # optimized_local_poses: (num_persons, num_frames, 23, 3, 3)
     optimized_scale, optimized_root_residual_translations, optimized_root_residual_rotations, optimized_local_poses = optimize_world_and_humans(
-        smpl_models_with_shape_jax_tuple,
-        smpl_joints,
+        smplx_models_with_shape_jax_tuple,
+        smplx_joints,
         megasam_joints,
         joint_confidences,
         init_global_orient,
         init_root_trans,
-        smpl_body_pose,
+        smplx_body_pose,
         # for projection loss
         cam_ext=extrinsics,
         cam_int=intrinsics,
         pose2d=vitpose_joints,
         pose2d_conf=vitpose_confidences,
-        smpl_whole=smpl_wholebody_joints,
+        smpl_whole=smplx_wholebody_joints,
         # for projection loss
         person_frame_mask=person_frame_mask,
         num_iterations=num_iterations,
@@ -853,7 +916,7 @@ def run_jax_alignment(
         optimized_root_rotations = optimized_root_rotations.as_matrix() # (1, num_frames, 3 , 3)
         optimized_root_rotations = np.array(optimized_root_rotations)
     if optimized_local_poses is not None:
-        optimized_local_poses = jaxlie.SO3(optimized_local_poses) @ jaxlie.SO3.from_matrix(smpl_body_pose)
+        optimized_local_poses = jaxlie.SO3(optimized_local_poses) @ jaxlie.SO3.from_matrix(smplx_body_pose)
         optimized_local_poses = optimized_local_poses.as_matrix() # (num_persons, num_frames, 23, 3, 3)
         optimized_local_poses = np.array(optimized_local_poses)
 
@@ -866,12 +929,12 @@ def run_jax_alignment(
     # If you want to make sure the data is parsed correctly, you can uncomment the following code and add visualization for 2d joints projection.
     # sample_idx = 100
     # vitpose_sample = vitpose_joints_np[0, sample_idx]
-    # smpl_joints_sample = smpl_joints_np[0, sample_idx] + optimized_root_residual_translations[0, sample_idx, None]
+    # smplx_joints_sample = smplx_joints_np[0, sample_idx] + optimized_root_residual_translations[0, sample_idx, None]
     # extrinsics_sample = camera_extrinsics_np[sample_idx]
     # extrinsics_sample[:3, 3] *= optimized_scale
     # intrinsics_sample = camera_intrinsics_np[sample_idx]
     # world2cam_sample = np.linalg.inv(extrinsics_sample)
-    # cam_joints_sample = world2cam_sample @ np.concatenate([smpl_joints_sample, np.ones_like(smpl_joints_sample)[:, :1]], axis=-1).T
+    # cam_joints_sample = world2cam_sample @ np.concatenate([smplx_joints_sample, np.ones_like(smplx_joints_sample)[:, :1]], axis=-1).T
     # cam_joints_sample = cam_joints_sample[:3, :].T
     # # projection
     # cam_joints_sample_proj = intrinsics_sample @ cam_joints_sample.T
@@ -881,31 +944,31 @@ def run_jax_alignment(
     
     # Update human parameters with optimized translations
     for p_idx, person_id in enumerate(person_ids):
-        smpl_model_beta_mean = smpl_models_beta_mean[person_id]
+        smplx_model_beta_mean = smplx_models_beta_mean[person_id]
         for f_idx, frame_idx in enumerate(frame_list):
             if person_frame_mask_np[p_idx, f_idx]:
                 if frame_idx in human_params_per_frame_per_person and \
                    person_id in human_params_per_frame_per_person[frame_idx]:
                     # Update root translation
-                    human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['root_transl'] = \
+                    human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['root_transl'] = \
                         torch.tensor(optimized_root_residual_translations[p_idx, f_idx], device='cuda').unsqueeze(0).float() # (1, 3)
                     
                     # Update beta with mean beta
-                    human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['betas'] = \
-                        torch.tensor(smpl_model_beta_mean, device='cuda').float() # (10)
+                    human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['betas'] = \
+                        torch.tensor(smplx_model_beta_mean, device='cuda').float() # (10)
                     
 
                     if optimized_root_residual_rotations is not None:
                         # Save the optimized residual root rotation
                         new_root_rot = optimized_root_rotations[p_idx, f_idx] # (3, 3)
-                        human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['global_orient'] = \
+                        human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['global_orient'] = \
                             torch.tensor(new_root_rot, device='cuda').unsqueeze(0).float() # (1, 3, 3)
 
                     if optimized_local_poses is not None:
                         # Save the optimized local pose
                         new_body_pose = optimized_local_poses[p_idx, f_idx] # (23, 3, 3)
 
-                        human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['body_pose'] = \
+                        human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['body_pose'] = \
                             torch.tensor(new_body_pose, device='cuda').float() # (23, 3, 3)
     
     # Naive One Euro Filter, SO(3) is gaurantted through 6d rot -> SO(3) matrix conversion; TODO: Use SLERP for rotations
@@ -927,7 +990,7 @@ def run_jax_alignment(
                     if person_frame_mask_np[p_idx, f_idx]:
                         if frame_idx in human_params_per_frame_per_person and \
                         person_id in human_params_per_frame_per_person[frame_idx]:
-                            param = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params'][param_name]
+                            param = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params'][param_name]
 
                             if param_name in ['body_pose', 'global_orient']:
                                 # convert to 6d rotation representation
@@ -947,7 +1010,7 @@ def run_jax_alignment(
                     if person_frame_mask_np[p_idx, len(frame_list) - 1 - rev_f_idx]:
                         if frame_idx in human_params_per_frame_per_person and \
                         person_id in human_params_per_frame_per_person[frame_idx]:
-                            param = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params'][param_name]
+                            param = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params'][param_name]
 
                             if param_name in ['body_pose', 'global_orient']:
                                 # convert to 6d rotation representation
@@ -968,7 +1031,7 @@ def run_jax_alignment(
                         # convert back to rotation matrix
                         mean_param = rotation_6d_to_matrix(mean_param[None, ...])[0]
 
-                    human_params_per_frame_per_person[frame_idx][person_id]['smpl_params'][param_name] = mean_param
+                    human_params_per_frame_per_person[frame_idx][person_id]['smplx_params'][param_name] = mean_param
 
     # Update world_env with scaled points and poses
     for frame_name in frame_names:
@@ -978,30 +1041,30 @@ def run_jax_alignment(
     # Visualize the MegaHunter results
     if vis:    
         world_env = monst3r_ga_output
-        smpl_verts_in_world = defaultdict(dict)
+        smplx_verts_in_world = defaultdict(dict)
         for p_idx, person_id in enumerate(person_ids):
             for f_idx, frame_idx in enumerate(frame_list):
                 if person_frame_mask_np[p_idx, f_idx]:
                     if frame_idx in human_params_per_frame_per_person and \
                     person_id in human_params_per_frame_per_person[frame_idx]:
                         
-                        root_rot = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['global_orient'][None, ...]
-                        body_pose = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['body_pose'][None, ...]
-                        betas = human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['betas'][None, ...]
+                        root_rot = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['global_orient'][None, ...]
+                        body_pose = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['body_pose'][None, ...]
+                        betas = human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['betas'][None, ...]
 
                         # Use the rotation in the visualization
-                        smpl_output = smpl_model(
+                        smplx_output = smplx_model(
                             body_pose=body_pose,
                             betas=betas,
                             global_orient=root_rot,  # Use the optimized root rotation
                             pose2rot=False
                         )
-                        smpl_root_joint = smpl_output.joints[0, 0:1, :]
+                        smplx_root_joint = smplx_output.joints[0, 0:1, :]
                         
                         try:
-                            smpl_verts = smpl_output.vertices - smpl_root_joint + human_params_per_frame_per_person[frame_idx][person_id]['smpl_params']['root_transl']
+                            smplx_verts = smplx_output.vertices - smplx_root_joint + human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']['root_transl']
                             frame_name = frame_names[frame_list.index(frame_idx)]
-                            smpl_verts_in_world[frame_name][person_id] = smpl_verts.squeeze(0).detach().cpu().numpy()
+                            smplx_verts_in_world[frame_name][person_id] = smplx_verts.squeeze(0).detach().cpu().numpy()
                         except:
                             import pdb; pdb.set_trace()
 
@@ -1013,7 +1076,7 @@ def run_jax_alignment(
                         for person_id in person_ids:
                             keypoints_3d_in_world[frame_name][person_id] *= optimized_scale
 
-                show_points_and_keypoints_and_smpl(world_env=world_env, world_scale_factor=1., keypoints_3d_in_world=keypoints_3d_in_world, smpl_verts_in_world=smpl_verts_in_world, smpl_layer_faces=smpl_model.faces)
+                show_points_and_keypoints_and_smpl(world_env=world_env, world_scale_factor=1., keypoints_3d_in_world=keypoints_3d_in_world, smplx_verts_in_world=smplx_verts_in_world, smplx_layer_faces=smplx_model.faces)
 
             except Exception as e:
                 print(f"Error in show_points_and_keypoints_and_smpl: {e}")
@@ -1046,15 +1109,17 @@ def run_jax_alignment(
                 person_id in human_params_per_frame_per_person[frame_idx]:
                     valid_frames.append(frame_idx)
                 
-        param_keys = ['body_pose', 'global_orient', 'root_transl', 'betas']
+        param_keys = ['body_pose', 'global_orient', 'root_transl', 'betas', 'expression', 'jaw_pose', 'left_hand_pose', 'right_hand_pose']
         for frame_idx in valid_frames:
             for param_key in param_keys:
-                human_params_in_world[person_id][param_key].append(
-                    human_params_per_frame_per_person[frame_idx][person_id]['smpl_params'][param_key])
+                if param_key in human_params_per_frame_per_person[frame_idx][person_id]['smplx_params']:
+                    human_params_in_world[person_id][param_key].append(
+                        human_params_per_frame_per_person[frame_idx][person_id]['smplx_params'][param_key])
             
         # convert list of parameters to numpy array
         for param_key in param_keys:
-            human_params_in_world[person_id][param_key] = np.array(human_params_in_world[person_id][param_key])
+            if param_key in human_params_in_world[person_id]:
+                human_params_in_world[person_id][param_key] = np.array(human_params_in_world[person_id][param_key])
 
     total_output['our_pred_humans_smplx_params'] = human_params_in_world
 
@@ -1091,11 +1156,12 @@ def main(
     data_dir_postfix: str = "",
     bbox_dir: str = "",
     pose2d_dir: str = "",
-    smpl_dir: str = "",
+    smplx_dir: str = "",
     out_dir: str = "./demo_data/output_megahunter_human_and_points",
     use_g1_shape: bool = False,
     get_one_motion: bool = False,
     optimize_root_rotation: bool = True,
+    optimize_hand_pose: bool = True,
     post_temporal_smoothing: bool = True,
     gradient_thr: float = 0.15,
     pattern: str = "",
@@ -1110,13 +1176,14 @@ def main(
             world_env_path=world_env_path,
             bbox_dir=bbox_dir,
             pose2d_dir=pose2d_dir,
-            smpl_dir=smpl_dir,
+            smplx_dir=smplx_dir,
             out_dir=out_dir,
             get_one_motion=get_one_motion,
             use_g1_shape=use_g1_shape,
             multihuman=multihuman,
             max_humans=top_k,  # Use top_k parameter
             optimize_root_rotation=optimize_root_rotation,
+            optimize_hand_pose=optimize_hand_pose,
             gradient_thr=gradient_thr,
             post_temporal_smoothing=post_temporal_smoothing,
             vis=vis,
@@ -1143,7 +1210,7 @@ def main(
             cam_name = 'cam' + world_env_path.split(f'{sfm_method}_reconstruction_results_')[1].split('_cam')[1].split('_frame')[0]
             bbox_dir = osp.join(f"./demo_data/input_masks{data_dir_postfix}", video_dir_basename, cam_name, "json_data")
             pose2d_dir = osp.join(f"./demo_data/input_2d_poses{data_dir_postfix}", video_dir_basename, cam_name)
-            smpl_dir = osp.join(f"./demo_data/input_3d_meshes{data_dir_postfix}", video_dir_basename, cam_name)
+            smplx_dir = osp.join(f"./demo_data/input_smplx{data_dir_postfix}", video_dir_basename, cam_name)
         
             # # Check if the output file already exists
             # video_name = osp.basename(world_env_path).split('.h5')[0]
@@ -1159,13 +1226,14 @@ def main(
                     world_env_path=world_env_path,
                     bbox_dir=bbox_dir,
                     pose2d_dir=pose2d_dir,
-                    smpl_dir=smpl_dir,
+                    smplx_dir=smplx_dir,
                     out_dir=out_dir,
                     get_one_motion=get_one_motion,
                     use_g1_shape=use_g1_shape,
                     multihuman=multihuman,
                     max_humans=top_k,  # Use top_k parameter
                     optimize_root_rotation=optimize_root_rotation,
+                    optimize_hand_pose=optimize_hand_pose,
                     gradient_thr=gradient_thr,
                     post_temporal_smoothing=post_temporal_smoothing,
                     vis=vis,
