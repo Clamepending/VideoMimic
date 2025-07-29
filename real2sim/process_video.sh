@@ -76,13 +76,13 @@ fi
 
 if [ -n "$HEIGHT" ] && [ "$HEIGHT" != "0" ] && [ "$HEIGHT" != "-1" ]; then
     echo "Using height: $HEIGHT"
-    python stage2_optimization/optimize_smpl_shape_for_height.py --height "$HEIGHT" --output-dir "./demo_data/input_3d_meshes/${VIDEO_NAME}/cam01"
+    python -E -s stage2_optimization/optimize_smpl_shape_for_height.py --height "$HEIGHT" --output-dir "./demo_data/input_3d_meshes/${VIDEO_NAME}/cam01"
 fi
 
 # Step 2: Run MegaHunter (SMPL optimization)
 echo "Step 2: Running MegaHunter..."
 if [ "$MEGAHUNTER_FLAGS" == "--use-g1-shape" ]; then
-    echo "python stage2_optimization/megahunter_optimization.py \
+    echo "python -E -s stage2_optimization/megahunter_optimization.py \
         --world-env-path \"$MEGASAM_OUTPUT\" \
         --bbox-dir \"./demo_data/input_masks/${VIDEO_NAME}/cam01/json_data\" \
         --pose2d-dir \"./demo_data/input_2d_poses/${VIDEO_NAME}/cam01\" \
@@ -90,7 +90,7 @@ if [ "$MEGAHUNTER_FLAGS" == "--use-g1-shape" ]; then
         --out-dir \"./demo_data/output_smpl_and_points\" \
         $MEGAHUNTER_FLAGS"
 
-    python stage2_optimization/megahunter_optimization.py \
+    python -E -s stage2_optimization/megahunter_optimization.py \
         --world-env-path "$MEGASAM_OUTPUT" \
         --bbox-dir "./demo_data/input_masks/${VIDEO_NAME}/cam01/json_data" \
         --pose2d-dir "./demo_data/input_2d_poses/${VIDEO_NAME}/cam01" \
@@ -98,14 +98,14 @@ if [ "$MEGAHUNTER_FLAGS" == "--use-g1-shape" ]; then
         --out-dir "./demo_data/output_smpl_and_points" \
         $MEGAHUNTER_FLAGS
 else
-    echo "python stage2_optimization/megahunter_optimization.py \
+    echo "python -E -s stage2_optimization/megahunter_optimization.py \
         --world-env-path \"$MEGASAM_OUTPUT\" \
         --bbox-dir \"./demo_data/input_masks/${VIDEO_NAME}/cam01/json_data\" \
         --pose2d-dir \"./demo_data/input_2d_poses/${VIDEO_NAME}/cam01\" \
         --smpl-dir \"./demo_data/input_3d_meshes/${VIDEO_NAME}/cam01\" \
         --out-dir \"./demo_data/output_smpl_and_points\""
 
-    python stage2_optimization/megahunter_optimization.py \
+    python -E -s stage2_optimization/megahunter_optimization.py \
         --world-env-path "$MEGASAM_OUTPUT" \
         --bbox-dir "./demo_data/input_masks/${VIDEO_NAME}/cam01/json_data" \
         --pose2d-dir "./demo_data/input_2d_poses/${VIDEO_NAME}/cam01" \
@@ -149,7 +149,7 @@ conda activate vm1rs
 
 # Step 4: Run retargeting
 echo "Step 4: Running retargeting..."
-python stage4_retargeting/robot_motion_retargeting.py \
+python -E -s stage4_retargeting/robot_motion_retargeting.py \
     --src-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
     --contact-dir "./demo_data/input_contacts/${VIDEO_NAME}/cam01"
 
