@@ -142,20 +142,20 @@ def interpolate_hand_pose(prev_frame, next_frame, current_frame, mano_indices, m
 
 # ASSUMES FILES AND IN FORMAT mano_XXXXX.pkl and smpl_params_XXXXX.pkl
 def main(smpl_folder: str, mano_folder: str, output_folder: str, max_interpolation_distance: int = 10):
-    # Find all mano_XXXXX.pkl and smpl_params_XXXXX.pkl files
+    # Find all mano_XXXXX.pkl and smplx_combined_XXXXX.pkl files
     mano_files = [f for f in os.listdir(mano_folder) if re.match(r'mano_\d{5}\.pkl', f)]
-    smpl_files = [f for f in os.listdir(smpl_folder) if re.match(r'smpl_params_\d{5}\.pkl', f)]
+    smpl_files = [f for f in os.listdir(smpl_folder) if re.match(r'smplx_combined_\d{5}\.pkl', f)]
     
     # print found files
     print(f'Found {len(mano_files)} mano files')
-    print(f'Found {len(smpl_files)} smpl files')
+    print(f'Found {len(smpl_files)} smplx_combined files')
 
     # Extract indices
     mano_indices = {re.findall(r'\d{5}', f)[0]: f for f in mano_files}
     smpl_indices = {re.findall(r'\d{5}', f)[0]: f for f in smpl_files}
     # Iterate over all SMPL indices (not just common ones)
     all_smpl_indices = sorted(smpl_indices.keys())
-    print(f'Processing {len(all_smpl_indices)} SMPL files (output will be created for each)')
+    print(f'Processing {len(all_smpl_indices)} smplx_combined files (output will be created for each)')
 
     os.makedirs(output_folder, exist_ok=True)
 
@@ -165,7 +165,7 @@ def main(smpl_folder: str, mano_folder: str, output_folder: str, max_interpolati
         smplx_id = list(smplx_data.keys())[0]
 
         # Extract body_pose (first 21 joints)
-        body_pose = smplx_data[smplx_id]['smpl_params']['body_pose'][:21]  # shape (21, 3, 3)
+        body_pose = smplx_data[smplx_id]['smplx_params']['body_pose'][:21]  # shape (21, 3, 3)
 
         # Initialize hand poses
         left_hand_pose = None
@@ -196,7 +196,7 @@ def main(smpl_folder: str, mano_folder: str, output_folder: str, max_interpolati
         jaw_identity = np.tile(np.eye(3), (3, 1, 1))
 
         # Update the SMPL-X parameters with separate fields
-        smplx_params = smplx_data[smplx_id]['smpl_params']
+        smplx_params = smplx_data[smplx_id]['smplx_params']
         smplx_params['body_pose'] = body_pose
         if 'jaw_pose' not in smplx_params or smplx_params['jaw_pose'] is None:
             smplx_params['jaw_pose'] = jaw_identity
