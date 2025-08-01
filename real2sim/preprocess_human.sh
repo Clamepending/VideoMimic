@@ -41,4 +41,35 @@ CMD="python stage0_preprocessing/bstro_contact_detection.py --video-dir \"$CAM_D
 echo "$CMD"
 eval "$CMD"
 
+# Step 1.5: Run Wilor for hand detection
+echo "Step 1.5: Running Wilor for hand detection..."
+echo "python stage0_preprocessing/wilor_hand_poses.py \
+    --img_dir \"$BASE_DIR/input_images/$NAME/cam01\" \
+    --output_dir \"$BASE_DIR/mano/$NAME/cam01\" \
+    --pose2d_dir \"$BASE_DIR/input_2d_poses/$NAME/cam01\" \
+    --batch_size 2 \
+    --person_ids 1 \
+    --hand_bbox_thr 0.8 \
+    --vis"
+python stage0_preprocessing/wilor_hand_poses.py \
+    --img_dir "$BASE_DIR/input_images/$NAME/cam01" \
+    --output_dir "$BASE_DIR/mano/$NAME/cam01" \
+    --pose2d_dir "$BASE_DIR/input_2d_poses/$NAME/cam01" \
+    --batch_size 2 \
+    --person_ids 1 \
+    --hand_bbox_thr 0.8 \
+    --vis
+
+# Step 1.75: Combine SMPL and MANO to create SMPLX
+echo "Step 1.75: Running mano_smpl_to_smplx.py..."
+echo "python stage0_preprocessing/mano_smpl_to_smplx.py \
+    --smpl-folder \"$BASE_DIR/input_3d_meshes/$NAME/cam01\" \
+    --mano-folder \"$BASE_DIR/mano/$NAME/cam01\" \
+    --output-folder \"$BASE_DIR/input_smplx/$NAME/cam01\""
+python stage0_preprocessing/mano_smpl_to_smplx.py \
+    --smpl-folder "$BASE_DIR/input_3d_meshes/$NAME/cam01" \
+    --mano-folder "$BASE_DIR/mano/$NAME/cam01" \
+    --output-folder "$BASE_DIR/input_smplx/$NAME/cam01"
+
+
 echo -e "\nDone!"

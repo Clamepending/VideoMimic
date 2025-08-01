@@ -65,36 +65,6 @@ fi
 conda deactivate
 conda activate vm1rs
 
-# Step 1.5: Run Wilor for hand detection
-echo "Step 1.5: Running Wilor for hand detection..."
-echo "python get_mano_wilor.py \
-    --img_dir \"./demo_data/input_images/${VIDEO_NAME}/cam01\" \
-    --output_dir \"./demo_data/mano/${VIDEO_NAME}/cam01\" \
-    --pose2d_dir \"./demo_data/input_2d_poses/${VIDEO_NAME}/cam01\" \
-    --batch_size 2 \
-    --person_ids 1 \
-    --hand_bbox_thr 0.8 \
-    --vis"
-python get_mano_wilor.py \
-    --img_dir "./demo_data/input_images/${VIDEO_NAME}/cam01" \
-    --output_dir "./demo_data/mano/${VIDEO_NAME}/cam01" \
-    --pose2d_dir "./demo_data/input_2d_poses/${VIDEO_NAME}/cam01" \
-    --batch_size 2 \
-    --person_ids 1 \
-    --hand_bbox_thr 0.8 \
-    --vis
-
-# Step 1.75: Combine SMPL and MANO to create SMPLX
-echo "Step 1.75: Running mano_smpl_to_smplx.py..."
-echo "python mano_smpl_to_smplx.py \
-    --smpl-folder \"./demo_data/input_3d_meshes/${VIDEO_NAME}/cam01\" \
-    --mano-folder \"./demo_data/mano/${VIDEO_NAME}/cam01\" \
-    --output-folder \"./demo_data/input_smplx/${VIDEO_NAME}/cam01\""
-python mano_smpl_to_smplx.py \
-    --smpl-folder "./demo_data/input_3d_meshes/${VIDEO_NAME}/cam01" \
-    --mano-folder "./demo_data/mano/${VIDEO_NAME}/cam01" \
-    --output-folder "./demo_data/input_smplx/${VIDEO_NAME}/cam01"
-
 
 # Add --use-g1-shape flag for g1 robot if no height specified
 if [ -n "$HEIGHT" ] && [ "$HEIGHT" == "0" ] && [ "$ROBOT_NAME" = "g1" ]; then
@@ -143,44 +113,44 @@ else
         --out-dir "./demo_data/output_smpl_and_points"
 fi
 
-# # Get the MegaHunter output file
-# MEGAHUNTER_OUTPUT="./demo_data/output_smpl_and_points/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}.h5"
+# Get the MegaHunter output file
+MEGAHUNTER_OUTPUT="./demo_data/output_smpl_and_points/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}.h5"
 
-# if [ ! -f "$MEGAHUNTER_OUTPUT" ]; then
-#     echo "Error: Could not find MegaHunter output file"
-#     exit 1
-# fi
-
-# # conda deactivate
-# eval "$(conda shell.bash hook)"
-# conda activate vm1recon
-
-# # Step 3.1: Run postprocessing; GeoCalib + NDC 
-# echo "Step 3.1: Running postprocessing..."
-# if [ "$MEGAHUNTER_FLAGS" == "--use-g1-shape" ]; then
-#     echo "Using male shape"
-#     python stage3_postprocessing/postprocessing_pipeline.py \
-#         --megahunter-path "$MEGAHUNTER_OUTPUT" \
-#         --out-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
-#         --gender "male" \
-#         --is-megasam
-# else
-#     # echo "Using neutral shape"
-#     echo "Using male shape"
-#     python stage3_postprocessing/postprocessing_pipeline.py \
-#         --megahunter-path "$MEGAHUNTER_OUTPUT" \
-#         --out-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
-#         --gender "male" \
-#         --is-megasam
-# fi
+if [ ! -f "$MEGAHUNTER_OUTPUT" ]; then
+    echo "Error: Could not find MegaHunter output file"
+    exit 1
+fi
 
 # conda deactivate
-# conda activate vm1rs
+eval "$(conda shell.bash hook)"
+conda activate vm1recon
 
-# # Step 4: Run retargeting
-# echo "Step 4: Running retargeting..."
-# python stage4_retargeting/robot_motion_retargeting.py \
-#     --src-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
-#     --contact-dir "./demo_data/input_contacts/${VIDEO_NAME}/cam01"
+# Step 3.1: Run postprocessing; GeoCalib + NDC 
+echo "Step 3.1: Running postprocessing..."
+if [ "$MEGAHUNTER_FLAGS" == "--use-g1-shape" ]; then
+    echo "Using male shape"
+    python stage3_postprocessing/postprocessing_pipeline.py \
+        --megahunter-path "$MEGAHUNTER_OUTPUT" \
+        --out-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
+        --gender "male" \
+        --is-megasam
+else
+    # echo "Using neutral shape"
+    echo "Using male shape"
+    python stage3_postprocessing/postprocessing_pipeline.py \
+        --megahunter-path "$MEGAHUNTER_OUTPUT" \
+        --out-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
+        --gender "male" \
+        --is-megasam
+fi
 
-# echo "Processing complete!"
+conda deactivate
+conda activate vm1rs
+
+# Step 4: Run retargeting
+echo "Step 4: Running retargeting..."
+python stage4_retargeting/robot_motion_retargeting.py \
+    --src-dir "./demo_data/output_calib_mesh/megahunter_megasam_reconstruction_results_${VIDEO_NAME}_cam01_frame_${START_FRAME}_${END_FRAME}_subsample_${SUBSAMPLE_FACTOR}" \
+    --contact-dir "./demo_data/input_contacts/${VIDEO_NAME}/cam01"
+
+echo "Processing complete!"
