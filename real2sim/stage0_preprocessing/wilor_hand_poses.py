@@ -28,6 +28,9 @@ from tqdm import tqdm
 from pathlib import Path
 from collections import defaultdict
 
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
 import trimesh
