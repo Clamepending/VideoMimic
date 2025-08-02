@@ -61,15 +61,17 @@ python stage0_preprocessing/wilor_hand_poses.py \
     --vis
 
 # Step 1.75: Combine SMPL and MANO to create SMPLX
-echo "Step 1.75: Running mano_smpl_to_smplx.py..."
-echo "python stage0_preprocessing/mano_smpl_to_smplx.py \
-    --smpl-folder \"$BASE_DIR/input_3d_meshes/$NAME/cam01\" \
-    --mano-folder \"$BASE_DIR/mano/$NAME/cam01\" \
-    --output-folder \"$BASE_DIR/input_smplx/$NAME/cam01\""
-python stage0_preprocessing/mano_smpl_to_smplx.py \
-    --smpl-folder "$BASE_DIR/input_3d_meshes/$NAME/cam01" \
-    --mano-folder "$BASE_DIR/mano/$NAME/cam01" \
-    --output-folder "$BASE_DIR/input_smplx/$NAME/cam01"
+echo "Step 1.75: Running smpl_to_smplx_conversion.py..."
+echo "python stage0_preprocessing/smpl_to_smplx_conversion.py \
+    --smpl-dir \"$BASE_DIR/input_3d_meshes/$NAME/cam01\" \
+    --mano-dir \"$BASE_DIR/mano/$NAME/cam01\" \
+    --output-dir \"$BASE_DIR/input_smplx/$NAME/cam01\" \
+    $VIS_FLAG"
+python stage0_preprocessing/smpl_to_smplx_conversion.py \
+    --smpl-dir "$BASE_DIR/input_3d_meshes/$NAME/cam01" \
+    --mano-dir "$BASE_DIR/mano/$NAME/cam01" \
+    --output-dir "$BASE_DIR/input_smplx/$NAME/cam01" \
+    $VIS_FLAG
 
 
 echo -e "\nDone!"

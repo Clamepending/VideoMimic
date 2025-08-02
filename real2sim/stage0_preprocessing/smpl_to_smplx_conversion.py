@@ -7,6 +7,8 @@
 # For questions or issues, please contact Hongsuk Choi (redstonepo@gmail.com)
 
 import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import os.path as osp
 import glob
 import pickle
@@ -182,11 +184,11 @@ def main(
 
     assert len(mano_files) == len(smpl_files), f"Number of mano files ({len(mano_files)}) and smpl files ({len(smpl_files)}) do not match"
 
-    smpl_to_smplx_shape_converter = ShapeConverter(essentials_folder='./',
+    smpl_to_smplx_shape_converter = ShapeConverter(essentials_folder=osp.join(osp.dirname(__file__), '..', 'assets'),
             inbm_type='smpl', outbm_type='smplx', def_outbm=True, del_inbm=True)
 
     device = 'cpu' if not torch.cuda.is_available() else 'cuda'
-    smplx_layer = smplx.create(model_path = './body_models', model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 1).float().to(device)
+    smplx_layer = smplx.create(model_path = osp.join(osp.dirname(__file__), '..', 'assets', 'body_models'), model_type = 'smplx', gender = 'neutral', use_pca = False, num_pca_comps = 45, flat_hand_mean = True, use_face_contour = True, num_betas = 10, batch_size = 1).float().to(device)
 
     if vis:
         vis_output_dir = os.path.join(output_dir, 'vis')
