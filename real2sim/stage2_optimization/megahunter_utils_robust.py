@@ -203,22 +203,6 @@ def get_smplx_init_data_robust(
                     missing_data[person_id].add(frame_idx)
                 else:
                     params = smpl_params_dict[frame_idx][person_id]['smplx_params']
-                    if verbose:
-                        print(f"\n--- SMPL-X Stats: Frame {frame_idx}, Person {person_id} ---")
-                        if not params:
-                            print("  WARNING: smplx_params dictionary is empty.")
-                        for key, val in params.items():
-                            if hasattr(val, 'shape'):
-                                print(f"  - {key} (Shape: {val.shape})")
-                                if val.size > 0:
-                                    print(f"    - Stats (mean, std, min, max): {np.mean(val):.4f}, {np.std(val):.4f}, {np.min(val):.4f}, {np.max(val):.4f}")
-                                    if np.all(val == 0):
-                                        print("    - WARNING: All values are zero.")
-                                else:
-                                    print("    - WARNING: Array is empty.")
-                            else:
-                                print(f"  - {key}: {val}")
-                        print("-------------------------------------------------")
                         
                     for key, val in params.items():
                         if np.any(np.isnan(val)):
