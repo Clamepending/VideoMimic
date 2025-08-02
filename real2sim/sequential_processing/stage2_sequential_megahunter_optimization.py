@@ -43,7 +43,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
-from stage2_optimization.megahunter_optimization import main as megahunter_optimize
+from VideoMimic.real2sim.stage2_optimization.megahunter_optimization_smplx import main as megahunter_optimize
 
 
 def find_matching_videos(
