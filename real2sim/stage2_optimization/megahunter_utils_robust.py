@@ -157,6 +157,137 @@ def fill_missing_smpl_data(
     return filled_dict
 
 
+def get_smplx_init_data_robust(
+    data_path: str, 
+    frame_list: List[int], 
+    expected_person_ids: Optional[List[int]] = None,
+    fill_missing: bool = True,
+    verbose: bool = True
+) -> Tuple[Dict, Dict[int, Set[int]]]:
+    """
+    Load SMPL-X parameters with robust handling for missing data.
+    """
+    smpl_params_dict = {}
+    missing_data = defaultdict(set)
+    found_person_ids = set()
+    
+    for frame_idx in frame_list:
+        pkl_path = osp.join(data_path, f"smplx_combined_{frame_idx:05d}.pkl")
+        
+        if not osp.exists(pkl_path):
+            if verbose:
+                print(f"Warning: SMPL-X file missing for frame {frame_idx}")
+            continue
+            
+        try:
+            with open(pkl_path, 'rb') as f:
+                frame_data = pickle.load(f)
+            
+            smpl_params_dict[frame_idx] = frame_data
+            found_person_ids.update(frame_data.keys())
+            
+        except Exception as e:
+            warnings.warn(f"Error loading SMPL-X data for frame {frame_idx}: {e}")
+            continue
+    
+    if expected_person_ids is None:
+        expected_person_ids = sorted(list(found_person_ids))
+    
+    for frame_idx in frame_list:
+        if frame_idx not in smpl_params_dict:
+            for person_id in expected_person_ids:
+                missing_data[person_id].add(frame_idx)
+        else:
+            for person_id in expected_person_ids:
+                if person_id not in smpl_params_dict[frame_idx]:
+                    missing_data[person_id].add(frame_idx)
+                else:
+                    params = smpl_params_dict[frame_idx][person_id]['smplx_params']
+                    if verbose:
+                        print(f"\n--- SMPL-X Stats: Frame {frame_idx}, Person {person_id} ---")
+                        if not params:
+                            print("  WARNING: smplx_params dictionary is empty.")
+                        for key, val in params.items():
+                            if hasattr(val, 'shape'):
+                                print(f"  - {key} (Shape: {val.shape})")
+                                if val.size > 0:
+                                    print(f"    - Stats (mean, std, min, max): {np.mean(val):.4f}, {np.std(val):.4f}, {np.min(val):.4f}, {np.max(val):.4f}")
+                                    if np.all(val == 0):
+                                        print("    - WARNING: All values are zero.")
+                                else:
+                                    print("    - WARNING: Array is empty.")
+                            else:
+                                print(f"  - {key}: {val}")
+                        print("-------------------------------------------------")
+                        
+                    for key, val in params.items():
+                        if np.any(np.isnan(val)):
+                            warnings.warn(f"NaN found in frame {frame_idx}, person {person_id}, param {key}")
+                            missing_data[person_id].add(frame_idx)
+                            break
+    
+    if verbose and missing_data:
+        print("\nMissing SMPL-X data summary:")
+        for person_id, missing_frames in missing_data.items():
+            print(f"  Person {person_id}: {len(missing_frames)} missing frames")
+    
+    if fill_missing and missing_data:
+        smpl_params_dict = fill_missing_smplx_data(
+            smpl_params_dict, missing_data, expected_person_ids, frame_list, verbose
+        )
+    
+    return smpl_params_dict, dict(missing_data)
+
+
+def fill_missing_smplx_data(
+    smpl_params_dict: Dict,
+    missing_data: Dict[int, Set[int]],
+    person_ids: List[int],
+    frame_list: List[int],
+    verbose: bool = True
+) -> Dict:
+    """
+    Fill missing SMPL-X data using nearest neighbor interpolation.
+    """
+    filled_dict = smpl_params_dict.copy()
+    
+    for person_id in person_ids:
+        if person_id not in missing_data or not missing_data[person_id]:
+            continue
+            
+        valid_frames = []
+        for frame_idx in frame_list:
+            if (frame_idx in smpl_params_dict and 
+                person_id in smpl_params_dict[frame_idx] and
+                frame_idx not in missing_data[person_id]):
+                valid_frames.append(frame_idx)
+        
+        if not valid_frames:
+            warnings.warn(f"No valid SMPL-X data found for person {person_id}")
+            continue
+        
+        ref_frame = valid_frames[0]
+        ref_params = smpl_params_dict[ref_frame][person_id]['smplx_params']
+        
+        for missing_frame in missing_data[person_id]:
+            nearest_frame = min(valid_frames, key=lambda x: abs(x - missing_frame))
+            
+            if missing_frame not in filled_dict:
+                filled_dict[missing_frame] = {}
+            
+            filled_dict[missing_frame][person_id] = {
+                'smplx_params': {
+                    key: smpl_params_dict[nearest_frame][person_id]['smplx_params'][key].copy()
+                    for key in ref_params.keys()
+                }
+            }
+            
+            if verbose:
+                print(f"Filled frame {missing_frame} for person {person_id} using frame {nearest_frame}")
+    
+    return filled_dict
+
+
 def get_pose2d_init_data_robust(
     data_path: str,
     frame_list: List[int],
