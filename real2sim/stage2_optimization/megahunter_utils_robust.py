@@ -46,29 +46,95 @@ def get_smpl_init_data_robust(
     missing_data = defaultdict(set)
     found_person_ids = set()
     
+    print(f"\n=== DEBUG: SMPL Data Loading ===")
+    print(f"Data path: {data_path}")
+    print(f"Frame list length: {len(frame_list)}")
+    print(f"First 5 frames: {frame_list[:5]}")
+    
+    # Check if directory exists
+    if not osp.exists(data_path):
+        print(f"ERROR: SMPL directory does not exist: {data_path}")
+        return smpl_params_dict, dict(missing_data)
+    
+    # List files in directory
+    files_in_dir = os.listdir(data_path)
+    smpl_files = [f for f in files_in_dir if f.startswith('smpl_params_') and f.endswith('.pkl')]
+    print(f"Found {len(smpl_files)} SMPL files in directory")
+    if len(smpl_files) > 0:
+        print(f"Sample files: {smpl_files[:5]}")
+    
     # First pass: load all available data
     for frame_idx in frame_list:
         pkl_path = osp.join(data_path, f"smpl_params_{frame_idx:05d}.pkl")
         
         if not osp.exists(pkl_path):
             if verbose:
-                print(f"Warning: SMPL file missing for frame {frame_idx}")
+                print(f"Warning: SMPL file missing for frame {frame_idx}: {pkl_path}")
             continue
             
         try:
             with open(pkl_path, 'rb') as f:
                 frame_data = pickle.load(f)
             
+            print(f"\n--- Frame {frame_idx} ---")
+            print(f"  File: {osp.basename(pkl_path)}")
+            print(f"  Frame data type: {type(frame_data)}")
+            print(f"  Frame data keys: {list(frame_data.keys()) if isinstance(frame_data, dict) else 'Not a dict'}")
+            
+            if isinstance(frame_data, dict):
+                for person_id, person_data in frame_data.items():
+                    print(f"    Person {person_id}:")
+                    print(f"      Data type: {type(person_data)}")
+                    if isinstance(person_data, dict):
+                        print(f"      Keys: {list(person_data.keys())}")
+                        
+                        # Check SMPL parameters specifically
+                        if 'smpl_params' in person_data:
+                            smpl_params = person_data['smpl_params']
+                            print(f"      SMPL params type: {type(smpl_params)}")
+                            if isinstance(smpl_params, dict):
+                                print(f"      SMPL param keys: {list(smpl_params.keys())}")
+                                
+                                for key, val in smpl_params.items():
+                                    if val is not None:
+                                        if isinstance(val, np.ndarray):
+                                            nan_count = np.isnan(val).sum()
+                                            zero_count = (val == 0).sum()
+                                            total_elements = val.size
+                                            print(f"        {key}: shape={val.shape}, dtype={val.dtype}")
+                                            print(f"          NaN: {nan_count}/{total_elements} ({nan_count/total_elements*100:.1f}%)")
+                                            print(f"          Zeros: {zero_count}/{total_elements} ({zero_count/total_elements*100:.1f}%)")
+                                            print(f"          Range: [{val.min():.6f}, {val.max():.6f}]")
+                                            
+                                            if nan_count > 0:
+                                                print(f"          WARNING: Found {nan_count} NaN values!")
+                                            if zero_count == total_elements:
+                                                print(f"          WARNING: All values are zero!")
+                                        else:
+                                            print(f"        {key}: {type(val)} = {val}")
+                                    else:
+                                        print(f"        {key}: None")
+                        else:
+                            print(f"      No 'smpl_params' key found")
+                    else:
+                        print(f"      Data is not a dict: {type(person_data)}")
+            
             smpl_params_dict[frame_idx] = frame_data
             found_person_ids.update(frame_data.keys())
             
         except Exception as e:
             warnings.warn(f"Error loading SMPL data for frame {frame_idx}: {e}")
+            print(f"ERROR loading frame {frame_idx}: {e}")
             continue
     
     # Determine which person IDs to process
     if expected_person_ids is None:
         expected_person_ids = sorted(list(found_person_ids))
+    
+    print(f"\n--- Summary ---")
+    print(f"Found person IDs: {sorted(list(found_person_ids))}")
+    print(f"Expected person IDs: {expected_person_ids}")
+    print(f"Loaded frames: {len(smpl_params_dict)}")
     
     # Second pass: identify missing data
     for frame_idx in frame_list:
@@ -171,27 +237,85 @@ def get_smplx_init_data_robust(
     missing_data = defaultdict(set)
     found_person_ids = set()
     
+    print(f"\n=== DEBUG: SMPL-X Data Loading ===")
+    print(f"Data path: {data_path}")
+    print(f"Frame list length: {len(frame_list)}")
+    print(f"First 5 frames: {frame_list[:5]}")
+    
+    # Check if directory exists
+    if not osp.exists(data_path):
+        print(f"ERROR: SMPL-X directory does not exist: {data_path}")
+        return smpl_params_dict, dict(missing_data)
+    
+    # List files in directory
+    files_in_dir = os.listdir(data_path)
+    smplx_files = [f for f in files_in_dir if f.startswith('smplx_') and f.endswith('.pkl')]
+    print(f"Found {len(smplx_files)} SMPL-X files in directory")
+    if len(smplx_files) > 0:
+        print(f"Sample files: {smplx_files[:5]}")
+    
     for frame_idx in frame_list:
-        pkl_path = osp.join(data_path, f"smplx_combined_{frame_idx:05d}.pkl")
+        pkl_path = osp.join(data_path, f"smplx_{frame_idx:05d}.pkl")
         
         if not osp.exists(pkl_path):
             if verbose:
-                print(f"Warning: SMPL-X file missing for frame {frame_idx}")
+                print(f"Warning: SMPL-X file missing for frame {frame_idx}: {pkl_path}")
             continue
             
         try:
             with open(pkl_path, 'rb') as f:
                 frame_data = pickle.load(f)
             
+            print(f"\n--- Frame {frame_idx} ---")
+            print(f"  File: {osp.basename(pkl_path)}")
+            print(f"  Frame data type: {type(frame_data)}")
+            print(f"  Frame data keys: {list(frame_data.keys()) if isinstance(frame_data, dict) else 'Not a dict'}")
+            
+            if isinstance(frame_data, dict):
+                for person_id, person_data in frame_data.items():
+                    print(f"    Person {person_id}:")
+                    print(f"      Data type: {type(person_data)}")
+                    if isinstance(person_data, dict):
+                        print(f"      Keys: {list(person_data.keys())}")
+                        
+                        # Check for NaN and zero values in each parameter
+                        for key, val in person_data.items():
+                            if val is not None:
+                                if isinstance(val, np.ndarray):
+                                    nan_count = np.isnan(val).sum()
+                                    zero_count = (val == 0).sum()
+                                    total_elements = val.size
+                                    print(f"        {key}: shape={val.shape}, dtype={val.dtype}")
+                                    print(f"          NaN: {nan_count}/{total_elements} ({nan_count/total_elements*100:.1f}%)")
+                                    print(f"          Zeros: {zero_count}/{total_elements} ({zero_count/total_elements*100:.1f}%)")
+                                    print(f"          Range: [{val.min():.6f}, {val.max():.6f}]")
+                                    
+                                    if nan_count > 0:
+                                        print(f"          WARNING: Found {nan_count} NaN values!")
+                                    if zero_count == total_elements:
+                                        print(f"          WARNING: All values are zero!")
+                                else:
+                                    print(f"        {key}: {type(val)} = {val}")
+                            else:
+                                print(f"        {key}: None")
+                    else:
+                        print(f"      Data is not a dict: {type(person_data)}")
+            
             smpl_params_dict[frame_idx] = frame_data
             found_person_ids.update(frame_data.keys())
             
         except Exception as e:
             warnings.warn(f"Error loading SMPL-X data for frame {frame_idx}: {e}")
+            print(f"ERROR loading frame {frame_idx}: {e}")
             continue
     
     if expected_person_ids is None:
         expected_person_ids = sorted(list(found_person_ids))
+    
+    print(f"\n--- Summary ---")
+    print(f"Found person IDs: {sorted(list(found_person_ids))}")
+    print(f"Expected person IDs: {expected_person_ids}")
+    print(f"Loaded frames: {len(smpl_params_dict)}")
     
     for frame_idx in frame_list:
         if frame_idx not in smpl_params_dict:
@@ -202,10 +326,10 @@ def get_smplx_init_data_robust(
                 if person_id not in smpl_params_dict[frame_idx]:
                     missing_data[person_id].add(frame_idx)
                 else:
-                    params = smpl_params_dict[frame_idx][person_id]['smplx_params']
+                    params = smpl_params_dict[frame_idx][person_id]
                         
                     for key, val in params.items():
-                        if np.any(np.isnan(val)):
+                        if val is not None and isinstance(val, np.ndarray) and np.any(np.isnan(val)):
                             warnings.warn(f"NaN found in frame {frame_idx}, person {person_id}, param {key}")
                             missing_data[person_id].add(frame_idx)
                             break
@@ -251,7 +375,7 @@ def fill_missing_smplx_data(
             continue
         
         ref_frame = valid_frames[0]
-        ref_params = smpl_params_dict[ref_frame][person_id]['smplx_params']
+        ref_params = smpl_params_dict[ref_frame][person_id]
         
         for missing_frame in missing_data[person_id]:
             nearest_frame = min(valid_frames, key=lambda x: abs(x - missing_frame))
@@ -260,10 +384,8 @@ def fill_missing_smplx_data(
                 filled_dict[missing_frame] = {}
             
             filled_dict[missing_frame][person_id] = {
-                'smplx_params': {
-                    key: smpl_params_dict[nearest_frame][person_id]['smplx_params'][key].copy()
-                    for key in ref_params.keys()
-                }
+                key: smpl_params_dict[nearest_frame][person_id][key].copy() if smpl_params_dict[nearest_frame][person_id][key] is not None else None
+                for key in ref_params.keys()
             }
             
             if verbose:

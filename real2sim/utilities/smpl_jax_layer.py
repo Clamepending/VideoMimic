@@ -56,7 +56,7 @@ class SmplModel:
     def load(pickle_path: Path) -> SmplModel:
         # smpl_params: dict[str, onp.ndarray] = onp.load(npz_path, allow_pickle=True)
 
-        with open(pickle_path, 'rb') as smpl_file:
+        with open(pickle_path, "rb") as smpl_file:
             # smpl_params = Struct(**pickle.load(smpl_file, encoding='latin1'))
             smpl_params = pickle.load(smpl_file, encoding='latin1')
 
@@ -64,7 +64,14 @@ class SmplModel:
         # assert smpl_params["bs_type"].item() == b"lrotmin"
         valid_keys = ["f", "J_regressor", "kintree_table", "weights", "posedirs", "v_template", "shapedirs"]
         smpl_params["shapedirs"] = onp.array(smpl_params["shapedirs"], dtype=onp.float32)
-        smpl_params["J_regressor"] = onp.array(smpl_params["J_regressor"].toarray(), dtype=onp.float32)
+        
+        # Handle both regular SMPL and SMPL-X models
+        if hasattr(smpl_params["J_regressor"], 'toarray'):
+            # Regular SMPL model - J_regressor is a sparse matrix
+            smpl_params["J_regressor"] = onp.array(smpl_params["J_regressor"].toarray(), dtype=onp.float32)
+        else:
+            # SMPL-X model - J_regressor is already a numpy array
+            smpl_params["J_regressor"] = onp.array(smpl_params["J_regressor"], dtype=onp.float32)
         
         smpl_params = {k: _normalize_dtype(v) for k, v in smpl_params.items() if k in valid_keys}
 

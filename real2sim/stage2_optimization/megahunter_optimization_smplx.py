@@ -179,7 +179,8 @@ def run_jax_alignment(
     # Create output directory
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     if use_smplx:
-        smpl_model_path = "./assets/body_models/smplx/SMPLX_MALE.pkl"
+        # Use regular SMPL model for optimization since the optimization code is designed for it
+        smpl_model_path = "./assets/body_models/smpl/SMPL_MALE.pkl"
 
     # ------------------------------------------------------------------ #
     # 1. Load world-environment (MegaSam / Align3r) data

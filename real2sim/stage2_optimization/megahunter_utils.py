@@ -199,12 +199,84 @@ def get_megahunter_init_data(results: Dict, device: str = "cuda"):
 def get_smpl_init_data(data_path: str, frame_list: List[int]):
     """Load per-frame SMPL parameter pickles (as saved by VIMO/HMR2)."""
     smpl_params_dict: Dict[int, Dict] = {}
+    
+    print(f"\n=== DEBUG: Regular SMPL Data Loading ===")
+    print(f"Data path: {data_path}")
+    print(f"Frame list length: {len(frame_list)}")
+    print(f"First 5 frames: {frame_list[:5]}")
+    
+    # Check if directory exists
+    if not osp.exists(data_path):
+        print(f"ERROR: SMPL directory does not exist: {data_path}")
+        return smpl_params_dict
+    
+    # List files in directory
+    files_in_dir = os.listdir(data_path)
+    smpl_files = [f for f in files_in_dir if f.startswith('smpl_params_') and f.endswith('.pkl')]
+    print(f"Found {len(smpl_files)} SMPL files in directory")
+    if len(smpl_files) > 0:
+        print(f"Sample files: {smpl_files[:5]}")
+    
     for frame_idx in frame_list:
         smpl_data_path = osp.join(data_path, f"smpl_params_{frame_idx:05d}.pkl")
         if not osp.exists(smpl_data_path):
+            print(f"Warning: SMPL file missing for frame {frame_idx}: {smpl_data_path}")
             continue
+        
+        print(f"\n--- Frame {frame_idx} ---")
+        print(f"  File: {osp.basename(smpl_data_path)}")
+        
         with open(smpl_data_path, "rb") as f:
-            smpl_params_dict[frame_idx] = pickle.load(f)
+            frame_data = pickle.load(f)
+        
+        print(f"  Frame data type: {type(frame_data)}")
+        print(f"  Frame data keys: {list(frame_data.keys()) if isinstance(frame_data, dict) else 'Not a dict'}")
+        
+        if isinstance(frame_data, dict):
+            for person_id, person_data in frame_data.items():
+                print(f"    Person {person_id}:")
+                print(f"      Data type: {type(person_data)}")
+                if isinstance(person_data, dict):
+                    print(f"      Keys: {list(person_data.keys())}")
+                    
+                    # Check SMPL parameters specifically
+                    if 'smpl_params' in person_data:
+                        smpl_params = person_data['smpl_params']
+                        print(f"      SMPL params type: {type(smpl_params)}")
+                        if isinstance(smpl_params, dict):
+                            print(f"      SMPL param keys: {list(smpl_params.keys())}")
+                            
+                            for key, val in smpl_params.items():
+                                if val is not None:
+                                    if isinstance(val, np.ndarray):
+                                        nan_count = np.isnan(val).sum()
+                                        zero_count = (val == 0).sum()
+                                        total_elements = val.size
+                                        print(f"        {key}: shape={val.shape}, dtype={val.dtype}")
+                                        print(f"          NaN: {nan_count}/{total_elements} ({nan_count/total_elements*100:.1f}%)")
+                                        print(f"          Zeros: {zero_count}/{total_elements} ({zero_count/total_elements*100:.1f}%)")
+                                        print(f"          Range: [{val.min():.6f}, {val.max():.6f}]")
+                                        
+                                        if nan_count > 0:
+                                            print(f"          WARNING: Found {nan_count} NaN values!")
+                                        if zero_count == total_elements:
+                                            print(f"          WARNING: All values are zero!")
+                                    else:
+                                        print(f"        {key}: {type(val)} = {val}")
+                                else:
+                                    print(f"        {key}: None")
+                        else:
+                            print(f"      SMPL params is not a dict: {type(smpl_params)}")
+                    else:
+                        print(f"      No 'smpl_params' key found")
+                else:
+                    print(f"      Data is not a dict: {type(person_data)}")
+        
+        smpl_params_dict[frame_idx] = frame_data
+    
+    print(f"\n--- Summary ---")
+    print(f"Loaded frames: {len(smpl_params_dict)}")
+    
     return smpl_params_dict
 
 
